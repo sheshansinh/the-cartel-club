@@ -1,0 +1,979 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  BUSINESS_OWNER
+  MANAGER
+  RECEPTIONIST
+  CASHIER
+  INVENTORY_MANAGER
+  ACCOUNTANT
+  SUPPORT_AGENT
+  CUSTOMER
+}
+
+enum TableType {
+  POOL
+  SNOOKER
+}
+
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED
+  MAINTENANCE
+  INACTIVE
+}
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CHECKED_IN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  EXPIRED
+  NO_SHOW
+}
+
+enum PaymentStatus {
+  UNPAID
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentType {
+  BOOKING_ADVANCE
+  BOOKING_FULL
+  SESSION_PAYMENT
+  POS_SALE
+  EXPENSE
+  SALARY
+}
+
+enum MessageStatus {
+  NEW
+  READ
+  RESOLVED
+}
+
+enum SessionStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum SessionType {
+  ONLINE_BOOKING
+  WALK_IN
+  PREPAID
+  COMPLIMENTARY
+}
+
+enum RewardStatus {
+  EARNED
+  REDEEMED
+  EXPIRED
+  REVOKED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_FOR_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum AssetStatus {
+  OPERATIONAL
+  UNDER_MAINTENANCE
+  RETIRED
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+  RAZORPAY
+  CARD
+  BANK_TRANSFER
+}
+
+enum ExpenseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  PENDING
+  CONFIRMED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+// ─── Auth Models (next-auth v4 compatible) ───────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Users & Profiles ────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  name         String?
+  email        String   @unique
+  emailVerified DateTime?
+  image        String?
+  passwordHash String?
+  role         UserRole @default(CUSTOMER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accounts        Account[]
+  sessions        Session[]
+  customerProfile CustomerProfile?
+  employeeProfile EmployeeProfile?
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model CustomerProfile {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone             String?
+  phoneVerified     Boolean  @default(false)
+  profileImage      String?
+  totalPlayingHours Decimal  @default(0) @db.Decimal(10, 2)
+  lifetimeSpending  Decimal  @default(0) @db.Decimal(10, 2)
+  rewardBalance     Decimal  @default(0) @db.Decimal(10, 2)
+  membershipTier    String?  @default("BRONZE")
+  notes             String?  @db.Text
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  bookings       Booking[]
+  gamingSessions GamingSession[]
+  rewards        RewardLedger[]
+  supportTickets SupportTicket[]
+  posSales       POSSale[]
+
+  @@index([userId])
+  @@index([membershipTier])
+}
+
+model EmployeeProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone       String
+  address     String?  @db.Text
+  salary      Decimal? @db.Decimal(10, 2)
+  joinDate    DateTime @default(now())
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  shifts            Shift[]
+  attendanceRecords Attendance[]
+  salaryRecords     SalaryRecord[]
+  gamingSessions    GamingSession[]
+  posSales          POSSale[]
+  assignedTickets   SupportTicket[]
+
+  @@index([userId])
+  @@index([isActive])
+}
+
+// ─── Permissions & RBAC ──────────────────────────────────────────────────────
+
+model Permission {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String
+  module      String
+  createdAt   DateTime @default(now())
+
+  rolePermissions RolePermission[]
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  role         UserRole
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id])
+  createdAt    DateTime   @default(now())
+
+  @@unique([role, permissionId])
+  @@index([role])
+}
+
+// ─── Tables ──────────────────────────────────────────────────────────────────
+
+model Table {
+  id          String      @id @default(cuid())
+  tableNumber String      @unique
+  name        String
+  type        TableType
+  status      TableStatus @default(AVAILABLE)
+  isActive    Boolean     @default(true)
+  sequence    Int         @default(0)
+  hourlyRate  Decimal     @default(200) @db.Decimal(10, 2)
+  description String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  bookings       Booking[]
+  gamingSessions GamingSession[]
+  blockouts      TableBlockout[]
+
+  @@index([tableNumber])
+  @@index([isActive])
+  @@index([sequence])
+}
+
+model TableBlockout {
+  id          String   @id @default(cuid())
+  tableId     String
+  table       Table    @relation(fields: [tableId], references: [id])
+  startTime   DateTime
+  endTime     DateTime
+  reason      String
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  @@index([tableId])
+  @@index([startTime])
+}
+
+// ─── Bookings ────────────────────────────────────────────────────────────────
+
+model Booking {
+  id            String        @id @default(cuid())
+  bookingRef    String        @unique @default(cuid())
+  customerId    String?
+  customer      CustomerProfile? @relation(fields: [customerId], references: [id])
+  customerName  String
+  phone         String
+  email         String?
+  tableId       String
+  table         Table         @relation(fields: [tableId], references: [id])
+  bookingDate   DateTime
+  startTime     String        // stored as "HH:MM" (24-hour)
+  endTime       String        // stored as "HH:MM" (24-hour)
+  durationHours Decimal       @db.Decimal(4, 2)
+  status        BookingStatus @default(PENDING_PAYMENT)
+  paymentStatus PaymentStatus @default(UNPAID)
+  totalAmount   Decimal       @db.Decimal(10, 2)
+  advanceAmount Decimal       @default(0) @db.Decimal(10, 2)
+  notes         String?       @db.Text
+  holdExpiresAt DateTime?
+  checkedInAt   DateTime?
+  completedAt   DateTime?
+  cancelledAt   DateTime?
+  cancelReason  String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  payments       Payment[]
+  statusHistory  BookingStatusHistory[]
+  gamingSessions GamingSession[]
+
+  @@index([customerId])
+  @@index([tableId])
+  @@index([bookingDate])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([holdExpiresAt])
+  @@index([bookingRef])
+}
+
+model BookingStatusHistory {
+  id         String        @id @default(cuid())
+  bookingId  String
+  booking    Booking       @relation(fields: [bookingId], references: [id])
+  oldStatus  BookingStatus
+  newStatus  BookingStatus
+  changedBy  String?
+  reason     String?
+  createdAt  DateTime      @default(now())
+
+  @@index([bookingId])
+  @@index([createdAt])
+}
+
+// ─── Payments ────────────────────────────────────────────────────────────────
+
+model Payment {
+  id                  String        @id @default(cuid())
+  bookingId           String?
+  booking             Booking?      @relation(fields: [bookingId], references: [id])
+  amount              Decimal       @db.Decimal(10, 2)
+  currency            String        @default("INR")
+  status              PaymentStatus @default(PENDING)
+  paymentType         PaymentType   @default(BOOKING_ADVANCE)
+  paymentMethod       PaymentMethod?
+  razorpayOrderId     String?       @unique
+  razorpayPaymentId   String?       @unique
+  razorpaySignature   String?       @db.Text
+  failureReason       String?
+  refundId            String?
+  refundAmount        Decimal?      @db.Decimal(10, 2)
+  refundedAt          DateTime?
+  paidAt              DateTime?
+  metadata            String?       @db.Text
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([bookingId])
+  @@index([razorpayOrderId])
+  @@index([razorpayPaymentId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  provider    String    @default("razorpay")
+  eventType   String
+  eventId     String?   @unique
+  payload     String    @db.LongText
+  processed   Boolean   @default(false)
+  processedAt DateTime?
+  error       String?   @db.Text
+  createdAt   DateTime  @default(now())
+
+  @@index([eventType])
+  @@index([processed])
+  @@index([eventId])
+}
+
+// ─── Gaming Sessions ─────────────────────────────────────────────────────────
+
+model GamingSession {
+  id              String           @id @default(cuid())
+  sessionRef      String           @unique @default(cuid())
+  customerId      String?
+  customer        CustomerProfile? @relation(fields: [customerId], references: [id])
+  employeeId      String?
+  employee        EmployeeProfile? @relation(fields: [employeeId], references: [id])
+  tableId         String
+  table           Table            @relation(fields: [tableId], references: [id])
+  bookingId       String?
+  booking         Booking?         @relation(fields: [bookingId], references: [id])
+  sessionType     SessionType      @default(WALK_IN)
+  status          SessionStatus    @default(ACTIVE)
+  startTime       DateTime         @default(now())
+  endTime         DateTime?
+  expectedEndTime DateTime?
+  actualDuration  Decimal?         @default(0) @db.Decimal(8, 2) // hours
+  hourlyRate      Decimal          @db.Decimal(10, 2)
+  totalCharge     Decimal          @default(0) @db.Decimal(10, 2)
+  discountAmount  Decimal          @default(0) @db.Decimal(10, 2)
+  discountReason  String?
+  finalAmount     Decimal          @default(0) @db.Decimal(10, 2)
+  paymentStatus   PaymentStatus    @default(UNPAID)
+  paymentMethod   PaymentMethod?
+  notes           String?          @db.Text
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  adjustments SessionAdjustment[]
+
+  @@index([customerId])
+  @@index([employeeId])
+  @@index([tableId])
+  @@index([bookingId])
+  @@index([status])
+  @@index([startTime])
+}
+
+model SessionAdjustment {
+  id             String        @id @default(cuid())
+  sessionId      String
+  session        GamingSession @relation(fields: [sessionId], references: [id])
+  adjustmentType String
+  oldDuration    Decimal       @db.Decimal(8, 2)
+  newDuration    Decimal       @db.Decimal(8, 2)
+  reason         String
+  adjustedBy     String?
+  createdAt      DateTime      @default(now())
+
+  @@index([sessionId])
+}
+
+// ─── Loyalty & Rewards ───────────────────────────────────────────────────────
+
+model LoyaltyProgram {
+  id          String   @id @default(cuid())
+  name        String
+  description String   @db.Text
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rewardRules RewardRule[]
+}
+
+model RewardRule {
+  id              String         @id @default(cuid())
+  programId       String
+  program         LoyaltyProgram @relation(fields: [programId], references: [id])
+  name            String
+  hoursRequired   Decimal        @db.Decimal(8, 2)
+  bonusHours      Decimal        @db.Decimal(8, 2)
+  validForDays    Int?
+  isActive        Boolean        @default(true)
+  sortOrder       Int            @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([programId])
+  @@index([isActive])
+}
+
+model RewardLedger {
+  id            String          @id @default(cuid())
+  customerId    String
+  customer      CustomerProfile @relation(fields: [customerId], references: [id])
+  hoursEarned   Decimal         @db.Decimal(8, 2)
+  hoursRedeemed Decimal         @default(0) @db.Decimal(8, 2)
+  status        RewardStatus    @default(EARNED)
+  reason        String?
+  grantedBy     String?
+  validUntil    DateTime?
+  redeemedAt    DateTime?
+  sessionId     String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+  @@index([validUntil])
+}
+
+// ─── Products & Inventory ────────────────────────────────────────────────────
+
+model ProductCategory {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products Product[]
+}
+
+model Product {
+  id            String          @id @default(cuid())
+  categoryId    String
+  category      ProductCategory @relation(fields: [categoryId], references: [id])
+  name          String
+  sku           String?         @unique
+  barcode       String?
+  description   String?         @db.Text
+  purchaseCost  Decimal         @db.Decimal(10, 2)
+  sellingPrice  Decimal         @db.Decimal(10, 2)
+  currentStock  Decimal         @default(0) @db.Decimal(10, 3)
+  minStockLevel Decimal         @default(0) @db.Decimal(10, 3)
+  unit          String          @default("piece")
+  imageUrl      String?
+  isActive      Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  inventoryMovements  InventoryMovement[]
+  purchaseOrderItems  PurchaseOrderItem[]
+  posSaleItems        POSSaleItem[]
+
+  @@index([categoryId])
+  @@index([sku])
+  @@index([isActive])
+}
+
+model InventoryMovement {
+  id           String   @id @default(cuid())
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id])
+  movementType String   // PURCHASE, SALE, ADJUSTMENT, WASTAGE, RETURN
+  quantity     Decimal  @db.Decimal(10, 3)
+  previousStock Decimal @db.Decimal(10, 3)
+  newStock     Decimal  @db.Decimal(10, 3)
+  reason       String
+  referenceId  String?
+  referenceType String?
+  createdBy    String?
+  createdAt    DateTime @default(now())
+
+  @@index([productId])
+  @@index([movementType])
+  @@index([createdAt])
+}
+
+// ─── Suppliers & Purchasing ──────────────────────────────────────────────────
+
+model Supplier {
+  id            String   @id @default(cuid())
+  name          String
+  contactPerson String?
+  phone         String
+  email         String?
+  address       String?  @db.Text
+  gstNumber     String?
+  isActive      Boolean  @default(true)
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+  assets         Asset[]
+
+  @@index([isActive])
+}
+
+model PurchaseOrder {
+  id              String              @id @default(cuid())
+  supplierId      String
+  supplier        Supplier            @relation(fields: [supplierId], references: [id])
+  orderNumber     String              @unique
+  orderDate       DateTime            @default(now())
+  expectedDate    DateTime?
+  receivedDate    DateTime?
+  subtotal        Decimal             @default(0) @db.Decimal(10, 2)
+  taxAmount       Decimal             @default(0) @db.Decimal(10, 2)
+  totalAmount     Decimal             @default(0) @db.Decimal(10, 2)
+  paidAmount      Decimal             @default(0) @db.Decimal(10, 2)
+  status          PurchaseOrderStatus @default(DRAFT)
+  notes           String?             @db.Text
+  createdBy       String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  items PurchaseOrderItem[]
+
+  @@index([supplierId])
+  @@index([status])
+  @@index([orderDate])
+}
+
+model PurchaseOrderItem {
+  id               String        @id @default(cuid())
+  purchaseOrderId  String
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  productId        String
+  product          Product       @relation(fields: [productId], references: [id])
+  orderedQuantity  Decimal       @db.Decimal(10, 3)
+  receivedQuantity Decimal       @default(0) @db.Decimal(10, 3)
+  unitPrice        Decimal       @db.Decimal(10, 2)
+  totalPrice       Decimal       @db.Decimal(10, 2)
+  createdAt        DateTime      @default(now())
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+}
+
+// ─── POS System ──────────────────────────────────────────────────────────────
+
+model POSSale {
+  id            String        @id @default(cuid())
+  saleRef       String        @unique @default(cuid())
+  customerId    String?
+  customer      CustomerProfile? @relation(fields: [customerId], references: [id])
+  employeeId    String?
+  employee      EmployeeProfile? @relation(fields: [employeeId], references: [id])
+  saleDate      DateTime      @default(now())
+  subtotal      Decimal       @db.Decimal(10, 2)
+  discountAmount Decimal      @default(0) @db.Decimal(10, 2)
+  taxAmount     Decimal       @default(0) @db.Decimal(10, 2)
+  totalAmount   Decimal       @db.Decimal(10, 2)
+  paymentMethod PaymentMethod
+  paymentStatus PaymentStatus @default(PAID)
+  notes         String?
+  voidedAt      DateTime?
+  voidReason    String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  items    POSSaleItem[]
+  payments POSPayment[]
+
+  @@index([customerId])
+  @@index([employeeId])
+  @@index([saleDate])
+  @@index([saleRef])
+}
+
+model POSSaleItem {
+  id         String  @id @default(cuid())
+  saleId     String
+  sale       POSSale @relation(fields: [saleId], references: [id])
+  productId  String
+  product    Product @relation(fields: [productId], references: [id])
+  quantity   Decimal @db.Decimal(10, 3)
+  unitPrice  Decimal @db.Decimal(10, 2)
+  discount   Decimal @default(0) @db.Decimal(10, 2)
+  totalPrice Decimal @db.Decimal(10, 2)
+  createdAt  DateTime @default(now())
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+model POSPayment {
+  id        String        @id @default(cuid())
+  saleId    String
+  sale      POSSale       @relation(fields: [saleId], references: [id])
+  amount    Decimal       @db.Decimal(10, 2)
+  method    PaymentMethod
+  reference String?
+  createdAt DateTime      @default(now())
+
+  @@index([saleId])
+}
+
+// ─── Expenses & Accounting ───────────────────────────────────────────────────
+
+model ExpenseCategory {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  expenses Expense[]
+}
+
+model Expense {
+  id              String          @id @default(cuid())
+  categoryId      String
+  category        ExpenseCategory @relation(fields: [categoryId], references: [id])
+  amount          Decimal         @db.Decimal(10, 2)
+  date            DateTime        @default(now())
+  description     String
+  paymentMethod   PaymentMethod
+  referenceNumber String?
+  attachmentUrl   String?
+  status          ExpenseStatus   @default(PENDING)
+  approvedBy      String?
+  approvedAt      DateTime?
+  supplierId      String?
+  createdBy       String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([categoryId])
+  @@index([date])
+  @@index([status])
+}
+
+// ─── Employees ───────────────────────────────────────────────────────────────
+
+model Shift {
+  id         String          @id @default(cuid())
+  employeeId String
+  employee   EmployeeProfile @relation(fields: [employeeId], references: [id])
+  date       DateTime
+  startTime  DateTime
+  endTime    DateTime
+  notes      String?
+  createdAt  DateTime        @default(now())
+
+  @@index([employeeId])
+  @@index([date])
+}
+
+model Attendance {
+  id           String          @id @default(cuid())
+  employeeId   String
+  employee     EmployeeProfile @relation(fields: [employeeId], references: [id])
+  date         DateTime
+  checkInTime  DateTime?
+  checkOutTime DateTime?
+  status       String          @default("ABSENT") // PRESENT, ABSENT, LATE, HALF_DAY
+  notes        String?
+  createdAt    DateTime        @default(now())
+
+  @@unique([employeeId, date])
+  @@index([employeeId])
+  @@index([date])
+}
+
+model SalaryRecord {
+  id         String          @id @default(cuid())
+  employeeId String
+  employee   EmployeeProfile @relation(fields: [employeeId], references: [id])
+  month      Int             // 1-12
+  year       Int
+  baseSalary Decimal         @db.Decimal(10, 2)
+  bonus      Decimal         @default(0) @db.Decimal(10, 2)
+  deductions Decimal         @default(0) @db.Decimal(10, 2)
+  netSalary  Decimal         @db.Decimal(10, 2)
+  paidAt     DateTime?
+  notes      String?
+  createdAt  DateTime        @default(now())
+
+  @@unique([employeeId, month, year])
+  @@index([employeeId])
+  @@index([year, month])
+}
+
+// ─── Assets, Warranties, Maintenance ─────────────────────────────────────────
+
+model Asset {
+  id           String      @id @default(cuid())
+  name         String
+  category     String
+  serialNumber String?
+  purchaseDate DateTime
+  purchaseCost Decimal     @db.Decimal(10, 2)
+  supplierId   String?
+  supplier     Supplier?   @relation(fields: [supplierId], references: [id])
+  status       AssetStatus @default(OPERATIONAL)
+  location     String?
+  notes        String?     @db.Text
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  warranties         Warranty[]
+  maintenanceRecords MaintenanceRecord[]
+
+  @@index([category])
+  @@index([status])
+}
+
+model Warranty {
+  id          String   @id @default(cuid())
+  assetId     String
+  asset       Asset    @relation(fields: [assetId], references: [id])
+  startDate   DateTime
+  endDate     DateTime
+  provider    String?
+  documentUrl String?
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([assetId])
+  @@index([endDate])
+}
+
+model MaintenanceRecord {
+  id           String   @id @default(cuid())
+  assetId      String
+  asset        Asset    @relation(fields: [assetId], references: [id])
+  reportedDate DateTime @default(now())
+  description  String   @db.Text
+  cost         Decimal  @default(0) @db.Decimal(10, 2)
+  status       String   @default("PENDING") // PENDING, IN_PROGRESS, RESOLVED
+  resolvedAt   DateTime?
+  resolvedBy   String?
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([assetId])
+  @@index([status])
+}
+
+// ─── Support Tickets ─────────────────────────────────────────────────────────
+
+model SupportTicket {
+  id             String          @id @default(cuid())
+  ticketNumber   String          @unique
+  customerId     String
+  customer       CustomerProfile @relation(fields: [customerId], references: [id])
+  assignedTo     String?
+  assignedToUser EmployeeProfile? @relation(fields: [assignedTo], references: [id])
+  subject        String
+  category       String
+  priority       TicketPriority  @default(MEDIUM)
+  status         TicketStatus    @default(OPEN)
+  description    String          @db.Text
+  referenceId    String?
+  referenceType  String?
+  resolvedAt     DateTime?
+  resolution     String?         @db.Text
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  messages TicketMessage[]
+
+  @@index([customerId])
+  @@index([assignedTo])
+  @@index([status])
+  @@index([priority])
+}
+
+model TicketMessage {
+  id         String        @id @default(cuid())
+  ticketId   String
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id])
+  isInternal Boolean       @default(false)
+  message    String        @db.Text
+  senderId   String?
+  senderName String?
+  createdAt  DateTime      @default(now())
+
+  @@index([ticketId])
+}
+
+// ─── Notifications ───────────────────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String   @db.Text
+  type      String   // BOOKING, PAYMENT, REWARD, TICKET, ALERT, SYSTEM
+  isRead    Boolean  @default(false)
+  actionUrl String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+// ─── Audit Logs ──────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  action     String
+  module     String
+  entityId   String?
+  entityType String?
+  changes    String?  @db.LongText
+  ipAddress  String?
+  userAgent  String?  @db.Text
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([module])
+  @@index([createdAt])
+}
+
+// ─── Gallery & Content ───────────────────────────────────────────────────────
+
+model GalleryImage {
+  id        String   @id @default(cuid())
+  title     String
+  imageUrl  String
+  category  String
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@index([isActive])
+  @@index([sortOrder])
+}
+
+model ContactMessage {
+  id        String        @id @default(cuid())
+  name      String
+  phone     String
+  email     String?
+  message   String        @db.Text
+  status    MessageStatus @default(NEW)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ─── Business Settings ───────────────────────────────────────────────────────
+
+model BusinessSettings {
+  id               String   @id @default(cuid())
+  businessName     String
+  logoUrl          String?
+  phone            String
+  email            String
+  address          String   @db.Text
+  timezone         String   @default("Asia/Kolkata")
+  openingTime      String   @default("12:00")
+  closingTime      String   @default("23:00")
+  advanceAmount    Decimal  @default(100) @db.Decimal(10, 2)
+  fullPaymentOnly  Boolean  @default(true)
+  bookingHoldMins  Int      @default(15)
+  maxBookingDays   Int      @default(30)
+  googleMapsUrl    String?
+  instagramUrl     String?
+  whatsappNumber   String?
+  currency         String   @default("INR")
+  taxRate          Decimal  @default(0) @db.Decimal(5, 2)
+  updatedAt        DateTime @updatedAt
+}
